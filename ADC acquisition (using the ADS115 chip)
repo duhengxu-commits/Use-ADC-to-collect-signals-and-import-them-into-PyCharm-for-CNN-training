@@ -1,0 +1,47 @@
+import serial
+import time
+import csv
+
+# 串口配置
+ser = serial.Serial(
+    port='COM15',        
+    baudrate=115200,
+    parity=serial.PARITY_NONE,
+    stopbits=serial.STOPBITS_ONE,
+    bytesize=serial.EIGHTBITS,
+    timeout=1
+)
+
+# 数据采集配置
+samples_per_round = 676     
+rounds = 200                              
+label = "Normal Cable Vibration"                            # 替换工况标签（1 Stable、2 Normal Cable Vibration、3 Abnormal Cable Vibration、4 Anchor Loosening、5 Bridge Damage）
+csv_filename = 'vibration_dataset676.02.csv'   # 替换工况标签（1 Stable、2 Normal Cable Vibration、3 Abnormal Cable Vibration、4 Anchor Loosening、5 Bridge Damage）
+
+# 创建CSV文件并写入表头
+with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    header = ['Label'] + [str(i+1) for i in range(samples_per_round)]
+    writer.writerow(header)
+
+    print(f"开始采集 {rounds} 组数据，每组 {samples_per_round} 个样本...")
+
+    for r in range(rounds):
+        buffer = []
+        print(f"\n采集第 {r+1}/{rounds} 组数据...", end=' ')
+        while len(buffer) < samples_per_round:
+            if ser.in_waiting > 0:
+                raw_data = ser.readline()
+                try:
+                    decoded = raw_data.decode('utf-8').strip()
+                    value = float(decoded)
+                    buffer.append(value)
+                except:
+                    continue  # 跳过无法解析的数据
+
+        # 写入CSV一行：标签 + 480个数据
+        writer.writerow([label] + buffer)
+        print("完成")
+
+ser.close()
+print("\n全部采集完成，串口已关闭。数据已保存至:", csv_filename)
