@@ -1,0 +1,2 @@
+# Use-ADC-to-collect-signals-and-import-them-into-PyCharm-for-CNN-training
+Continuous analog signals are sampled using the hardware ADC.  The raw data is imported into the Python environment via the serial port (UART/USB).  The signal is subjected to noise reduction, normalization, and sliding window frame division.  Build a 1D-CNN model in PyCharm to automatically identify signals with different features.
