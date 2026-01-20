@@ -1,0 +1,136 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler, minmax_scale
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (classification_report, confusion_matrix,
+                             precision_score, recall_score, f1_score)
+import matplotlib.pyplot as plt
+import seaborn as sns
+import joblib
+import os
+
+# ========== 第一步：读取数据 ==========
+# 从CSV文件读取数据，假设第一列是标签，后面是480个特征
+data = pd.read_csv(r'I:\杜恒旭·616\616文档备份\课题\揽绳\采集\PythonProject\vibration_dataset676.001.csv')  # 替换为你自己的文件名
+y = data.iloc[:, 0]         # 取第一列作为标签
+X_raw = data.iloc[:, 1:]    # 取剩余676列作为原始特征数据
+
+# ========== 第二步：傅里叶变换（提取频域特征） ==========
+def apply_fft(df):
+    """
+    对每一行样本数据做快速傅里叶变换（FFT），提取频域特征。
+    返回的是一个新的DataFrame，每个样本变成了一组频率成分。
+    """
+    fft_data = np.abs(np.fft.fft(df.values))  # 对每行做FFT，取幅值
+    num_features = df.shape[1]  # 原始特征数量（676）
+    valid_fft = fft_data[:, :num_features // 2 + 1]  # 只保留前一半有效频率（对称性）
+    freq_labels = [f'Freq_{i}' for i in range(valid_fft.shape[1])]  # 频率列名
+    return pd.DataFrame(valid_fft, columns=freq_labels, index=df.index)
+
+X_fft = apply_fft(X_raw)  # 对原始数据做FFT
+
+# ========== 第三步：标准化处理 ==========
+# 将不同频率维度的特征缩放到均值为0，标准差为1
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_fft)  # 注意：是对频域数据做标准化
+X = pd.DataFrame(X_scaled, columns=X_fft.columns)
+
+# ========== 第四步：划分训练集和测试集 ==========
+# 使用 stratify 保证每一类标签在训练集和测试集中的比例一致
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,       # 测试集占20%
+    stratify=y,          # 分层抽样（保持类别比例）
+    random_state=42      # 保证结果可重复
+)
+
+# ========== 第五步：构建训练管道 ==========
+# 使用管道将标准化 + 随机森林封装成一个整体模型
+pipeline = Pipeline([
+    ('scaler', StandardScaler()),                # 再次标准化，防止泄漏
+    ('classifier', RandomForestClassifier(random_state=42))  # 分类器
+])
+
+# ========== 第六步：超参数搜索（网格搜索） ==========
+# 设置搜索范围，让模型自动尝试不同参数组合，找出最优方案
+param_grid = {
+    'classifier__n_estimators': [100, 200],     # 森林中树的数量
+    'classifier__max_depth': [10, None],        # 每棵树的最大深度
+    'classifier__min_samples_split': [5, 10],   # 内部节点最小分裂样本数
+    'classifier__class_weight': [None, 'balanced']  # 是否调整类别权重
+}
+
+# 用 GridSearchCV 搜索最优参数组合
+model = GridSearchCV(
+    pipeline,
+    param_grid,
+    cv=5,                    # 5折交叉验证
+    scoring='f1_weighted',   # 用加权F1分数做评估指标
+    n_jobs=-1,               # 用所有CPU核心加速
+    verbose=1                # 打印训练过程
+)
+
+# 开始模型训练
+model.fit(X_train, y_train)
+
+# ========== 第七步：模型评估 ==========
+# 用测试集评估模型效果
+y_pred = model.predict(X_test)
+class_names = ['Class1', 'Class2']  # 类别名称
+import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体为黑体
+plt.rcParams['axes.unicode_minus'] = False    # 解决负号'-'显示为方块的问题
+# 打印最优参数和分类报告
+print("最佳参数:", model.best_params_)
+print("\n分类报告：")
+print(classification_report(y_test, y_pred, target_names=class_names))
+
+# ========== 第八步：混淆矩阵可视化 ==========
+# 显示真实标签 vs 预测标签的对比
+plt.figure(figsize=(8, 6))
+sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d',
+            xticklabels=class_names, yticklabels=class_names, cmap='Blues')
+plt.title('混淆矩阵')
+plt.xlabel('预测标签')
+plt.ylabel('真实标签')
+plt.savefig('confusion_matrix.jpg', dpi=300)
+plt.close()
+
+# ========== 第九步：绘制雷达图对比各类性能 ==========
+# 每类的精度、召回率、F1绘制成雷达图
+categories = ['Precision', 'Recall', 'F1-score']
+plt.figure(figsize=(8, 8))
+ax = plt.subplot(111, polar=True)
+
+for i, cls in enumerate(class_names):
+    stats = [
+        precision_score(y_test, y_pred, average=None)[i],
+        recall_score(y_test, y_pred, average=None)[i],
+        f1_score(y_test, y_pred, average=None)[i]
+    ]
+    stats = minmax_scale(stats)  # 缩放到0-1之间
+    stats = np.concatenate((stats, [stats[0]]))  # 闭合雷达图
+
+    # 计算角度
+    angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+    angles += angles[:1]
+
+    ax.plot(angles, stats, label=cls)
+    ax.fill(angles, stats, alpha=0.1)
+
+# 设置图的方向和标签
+ax.set_theta_offset(np.pi / 2)
+ax.set_theta_direction(-1)
+ax.set_thetagrids(np.degrees(angles[:-1]), categories)
+ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+plt.title('分类性能雷达图')
+plt.savefig('performance_radar.jpg', dpi=300, bbox_inches='tight')
+plt.close()
+
+# ========== 第十步：保存模型 ==========
+# 保存训练好的模型和标准化器，后面可直接加载使用
+os.makedirs('models', exist_ok=True)
+joblib.dump(model.best_estimator_, 'models/final_model.pkl')  # 模型保存
+joblib.dump(scaler, 'models/scaler.pkl')                      # 标准化器保存
